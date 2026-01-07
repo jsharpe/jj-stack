@@ -70,6 +70,7 @@ export interface SubmissionPlan {
   repoInfo: { owner: string; repo: string };
   existingPRs: Map<string, PullRequest>;
   remoteName: string;
+  draft: boolean;
 }
 
 // Phase 3: Execution callbacks (unchanged from before)
@@ -279,6 +280,7 @@ export async function createPR(
   bookmarkName: string,
   baseBranch: string,
   title: string,
+  draft?: boolean,
 ): Promise<PullRequestItem> {
   const result = await octokit.rest.pulls.create({
     owner,
@@ -286,6 +288,7 @@ export async function createPR(
     title,
     head: bookmarkName,
     base: baseBranch,
+    draft: draft ?? false,
   });
 
   return result.data;
@@ -495,6 +498,7 @@ export async function createSubmissionPlan(
   segments: NarrowedBookmarkSegment[],
   remoteName: string,
   callbacks?: PlanCallbacks,
+  draft?: boolean,
 ): Promise<SubmissionPlan> {
   try {
     const bookmarksToSubmit = segments.map((s) => s.bookmark);
@@ -554,6 +558,7 @@ export async function createSubmissionPlan(
       },
       existingPRs,
       remoteName,
+      draft: draft ?? false,
     };
 
     callbacks?.onPlanReady?.(plan);
@@ -661,6 +666,7 @@ export async function executeSubmissionPlan(
           bookmark.name,
           baseBranchOptions[0],
           prContent.title,
+          plan.draft,
         );
 
         callbacks?.onPRCompleted?.(bookmark, pr);

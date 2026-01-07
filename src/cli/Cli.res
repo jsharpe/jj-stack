@@ -30,6 +30,7 @@ USAGE:
 COMMANDS:
   submit <bookmark>     Submit a bookmark and all downstack bookmarks as PRs
     --dry-run           Show what would be done without making changes
+    --draft             Create PRs as drafts
     --remote <name>     Use the specified Git remote (must be a GitHub remote)
 
   auth test             Test GitHub authentication
@@ -45,6 +46,7 @@ EXAMPLES:
   jj-stack                        # Show change graph
   jj-stack submit feature-branch  # Submit feature-branch and downstack as PRs
   jj-stack submit feature-branch --dry-run  # Preview what would be done
+  jj-stack submit feature-branch --draft    # Create PRs as drafts
   jj-stack submit feature-branch --remote upstream  # Use a specific remote
   jj-stack auth test              # Test GitHub authentication
 
@@ -130,6 +132,7 @@ let main = async () => {
       "options": {
         "remote": {"type": "string"},
         "dry-run": {"type": "boolean", "default": false},
+        "draft": {"type": "boolean", "default": false},
         "help": {"type": "boolean", "short": "h", "default": false},
       },
       "allowPositionals": true,
@@ -152,6 +155,14 @@ let main = async () => {
       switch dryRun {
       | Boolean(b) => b
       | _ => Exn.raiseError("--dry-run was used as a string")
+      }
+    | None => false
+    }
+    let isDraft = switch Js.Dict.get(parsed["values"], "draft") {
+    | Some(draft) =>
+      switch draft {
+      | Boolean(b) => b
+      | _ => Exn.raiseError("--draft was used as a string")
       }
     | None => false
     }
@@ -188,17 +199,17 @@ let main = async () => {
         }
       | "submit" =>
         if isHelp {
-          Console.error("Usage: jj-stack submit <bookmark-name> [--dry-run] [--remote <name>]")
+          Console.error("Usage: jj-stack submit <bookmark-name> [--dry-run] [--draft] [--remote <name>]")
         } else {
           switch subArg {
           | Some(bookmarkName) =>
             await SubmitCommand.submitCommand(
               jjFunctions,
               bookmarkName,
-              ~options={dryRun: isDryRun, remote: remoteName},
+              ~options={dryRun: isDryRun, draft: isDraft, remote: remoteName},
             )
           | None => {
-              Console.error("Usage: jj-stack submit <bookmark-name> [--dry-run] [--remote <name>]")
+              Console.error("Usage: jj-stack submit <bookmark-name> [--dry-run] [--draft] [--remote <name>]")
               exit(1)
             }
           }
