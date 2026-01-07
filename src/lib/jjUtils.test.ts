@@ -2,6 +2,7 @@ import {
   buildChangeGraph,
   isGitHubRemote,
   filterGitHubRemotes,
+  parseJsonLines,
   type JjFunctions,
 } from "./jjUtils.js";
 import type { LogEntry, Bookmark } from "./jjTypes.js";
@@ -649,5 +650,101 @@ suite("remote validation", () => {
 
     const githubRemotes = filterGitHubRemotes(remotes);
     assert.equal(githubRemotes.length, 0);
+  });
+});
+
+suite("JSON parsing with embedded newlines", () => {
+  test("parses single-line JSON objects", () => {
+    const input = '{"name":"John","age":30}\n{"name":"Jane","age":25}';
+    const result = parseJsonLines(input);
+
+    assert.equal(result.length, 2);
+    assert.deepEqual(result[0], { name: "John", age: 30 });
+    assert.deepEqual(result[1], { name: "Jane", age: 25 });
+  });
+
+  test("handles JSON split across lines by literal newlines", () => {
+    // Simulate the case where jj output has a literal newline that splits JSON across lines
+    // This happens when git config values have trailing newlines that aren't properly escaped
+    // The input represents: { "commitId":"abc123","authorName":"James[NEWLINE]Sharpe","email":"test@example.com" }
+    // But split across two lines. We concatenate to form valid JSON.
+    const input = '{"commitId":"abc123","authorName":"James\nSharpe","email":"test@example.com"}';
+    const result = parseJsonLines(input);
+
+    assert.equal(result.length, 1);
+    // Note: The spurious newline is removed by concatenation, resulting in "JamesSharpe"
+    // This is the expected behavior - we're fixing broken output from jj
+    assert.deepEqual(result[0], {
+      commitId: "abc123",
+      authorName: "JamesSharpe",
+      email: "test@example.com",
+    });
+  });
+
+  test("handles Windows-style line endings (CRLF)", () => {
+    const input = '{"name":"John","age":30}\r\n{"name":"Jane","age":25}';
+    const result = parseJsonLines(input);
+
+    assert.equal(result.length, 2);
+    assert.deepEqual(result[0], { name: "John", age: 30 });
+    assert.deepEqual(result[1], { name: "Jane", age: 25 });
+  });
+
+  test("handles realistic jj log output split by literal newline", () => {
+    // This simulates the actual bug that was occurring in jj-source
+    // The JSON is split across multiple lines due to a literal newline in the output
+    const input = `{ "commitId":"9d79ec7e2f92", "changeId":"orspqpkpuxoy", "authorName":"James
+Sharpe", "authorEmail":"test@example.com", "descriptionFirstLine":"Test commit", "parents": ["abc123"], "localBookmarks": ["test"], "remoteBookmarks": [], "isCurrentWorkingCopy":false, "authoredAt":"2024-01-01T00:00:00Z", "committedAt":"2024-01-01T00:00:00Z" }`;
+
+    const result = parseJsonLines(input);
+
+    assert.equal(result.length, 1);
+    const parsed = result[0] as Record<string, unknown>;
+    assert.equal(parsed.commitId, "9d79ec7e2f92");
+    assert.equal(parsed.changeId, "orspqpkpuxoy");
+    // The spurious newline is removed, concatenating "James" and "Sharpe"
+    assert.equal(parsed.authorName, "JamesSharpe");
+    assert.equal(parsed.authorEmail, "test@example.com");
+  });
+
+  test("handles multiple JSON objects with one split across lines", () => {
+    // First object is fine, second is split, third is fine
+    const input = '{"id":1,"name":"Alice"}\n{"id":2,"desc":"Line\n2"}\n{"id":3,"name":"Bob"}';
+    const result = parseJsonLines(input);
+
+    assert.equal(result.length, 3);
+    assert.deepEqual(result[0], { id: 1, name: "Alice" });
+    // The literal newline is removed
+    assert.deepEqual(result[1], { id: 2, desc: "Line2" });
+    assert.deepEqual(result[2], { id: 3, name: "Bob" });
+  });
+
+  test("handles empty lines", () => {
+    const input = '{"name":"John"}\n\n{"name":"Jane"}\n';
+    const result = parseJsonLines(input);
+
+    assert.equal(result.length, 2);
+    assert.deepEqual(result[0], { name: "John" });
+    assert.deepEqual(result[1], { name: "Jane" });
+  });
+
+  test("handles JSON objects with properly escaped newlines", () => {
+    // When newlines are properly escaped as \\n in the JSON, they parse correctly
+    const input = '{"name":"John\\nDoe","age":30}';
+    const result = parseJsonLines(input);
+
+    assert.equal(result.length, 1);
+    const parsed = result[0] as Record<string, unknown>;
+    // The escaped newline becomes a literal newline in the parsed string
+    assert.equal(parsed.name, "John\nDoe");
+    assert.equal(parsed.age, 30);
+  });
+
+  test("throws error for malformed JSON", () => {
+    const input = '{"name":"John"}\n{invalid json}';
+
+    assert.throws(() => {
+      parseJsonLines(input);
+    }, /Failed to parse JSON buffer/);
   });
 });

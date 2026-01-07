@@ -394,7 +394,7 @@ async function findCommentData(
   );
 
   if (comment?.body) {
-    const lines = comment.body.trim().split("\n");
+    const lines = comment.body.trim().split(/\r?\n/);
     if (
       lines[0] &&
       lines[0].includes(commentDataPrefix) &&

@@ -4,6 +4,9 @@ type inkKey = {
   leftArrow: bool,
   rightArrow: bool,
   return: bool,
+  tab: bool,
+  shift: bool,
+  escape: bool,
 }
 
 // AIDEV-NOTE: Ink render function returns an instance with cleanup methods

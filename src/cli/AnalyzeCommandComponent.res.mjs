@@ -10,7 +10,9 @@ import * as Belt_SetString from "rescript/lib/es6/belt_SetString.js";
 import * as JsxRuntime from "react/jsx-runtime";
 
 function AnalyzeCommandComponent(props) {
+  var onExit = props.onExit;
   var onSelect = props.onSelect;
+  var existingPRs = props.existingPRs;
   var output = props.output;
   var changeGraph = props.changeGraph;
   var selectableIndices = React.useMemo((function () {
@@ -27,7 +29,8 @@ function AnalyzeCommandComponent(props) {
   var match = React.useState(function () {
         return {
                 selectedIndex: initialSelectedIndex,
-                scrollOffset: 0
+                scrollOffset: 0,
+                draft: false
               };
       });
   var setUiState = match[1];
@@ -41,7 +44,7 @@ function AnalyzeCommandComponent(props) {
     var processRows = process.stdout.rows;
     terminalHeight = processRows !== undefined ? Caml_option.valFromOption(processRows) : 20;
   }
-  var contentViewportHeight = terminalHeight - 3 | 0;
+  var contentViewportHeight = terminalHeight - 4 | 0;
   var totalItems = output.length;
   var calculateScrollOffset = function (selectedIndex, currentScrollOffset, contentViewportHeight, totalItems, selectableIndices) {
     if (totalItems <= contentViewportHeight) {
@@ -57,18 +60,21 @@ function AnalyzeCommandComponent(props) {
       return currentScrollOffset;
     }
   };
-  $$Ink.useInput((function (param, key) {
-          if (key.upArrow) {
+  $$Ink.useInput((function (_input, key) {
+          if (key.escape) {
+            onExit();
+          } else if (key.upArrow) {
             var currentPos = Core__Option.getOr(Core__Array.findIndexOpt(selectableIndices, (function (idx) {
                         return idx === uiState.selectedIndex;
                       })), 0);
             if (currentPos > 0) {
               var newSelectedIndex = Core__Option.getExn(selectableIndices[currentPos - 1 | 0], undefined);
               var newScrollOffset = calculateScrollOffset(newSelectedIndex, uiState.scrollOffset, contentViewportHeight, totalItems, selectableIndices);
-              setUiState(function (param) {
+              setUiState(function (prev) {
                     return {
                             selectedIndex: newSelectedIndex,
-                            scrollOffset: newScrollOffset
+                            scrollOffset: newScrollOffset,
+                            draft: prev.draft
                           };
                   });
             }
@@ -80,10 +86,11 @@ function AnalyzeCommandComponent(props) {
             if (currentPos$1 < (selectableIndices.length - 1 | 0)) {
               var newSelectedIndex$1 = Core__Option.getExn(selectableIndices[currentPos$1 + 1 | 0], undefined);
               var newScrollOffset$1 = calculateScrollOffset(newSelectedIndex$1, uiState.scrollOffset, contentViewportHeight, totalItems, selectableIndices);
-              setUiState(function (param) {
+              setUiState(function (prev) {
                     return {
                             selectedIndex: newSelectedIndex$1,
-                            scrollOffset: newScrollOffset$1
+                            scrollOffset: newScrollOffset$1,
+                            draft: prev.draft
                           };
                   });
             }
@@ -93,11 +100,19 @@ function AnalyzeCommandComponent(props) {
             if (row !== undefined) {
               var changeId = row.changeId;
               if (changeId !== undefined) {
-                onSelect(changeId);
+                onSelect(changeId, uiState.draft);
               }
               
             }
             
+          } else if (key.tab && key.shift) {
+            setUiState(function (prev) {
+                  return {
+                          selectedIndex: prev.selectedIndex,
+                          scrollOffset: prev.scrollOffset,
+                          draft: !prev.draft
+                        };
+                });
           }
           
         }), undefined);
@@ -136,8 +151,19 @@ function AnalyzeCommandComponent(props) {
   var visibleStartIndex = match$1[0];
   return JsxRuntime.jsxs($$Ink.Box, {
               children: [
-                JsxRuntime.jsx($$Ink.Text, {
-                      children: "Select a stack to submit:"
+                JsxRuntime.jsxs($$Ink.Box, {
+                      children: [
+                        JsxRuntime.jsx($$Ink.Text, {
+                              children: "Select a stack to submit"
+                            }),
+                        uiState.draft ? JsxRuntime.jsx($$Ink.Text, {
+                                children: " [DRAFT MODE]",
+                                color: "yellow"
+                              }) : null,
+                        JsxRuntime.jsx($$Ink.Text, {
+                              children: ":"
+                            })
+                      ]
                     }),
                 Core__Array.make((visibleEndIndex - visibleStartIndex | 0) + 1 | 0, 0).map(function (param, i) {
                         return visibleStartIndex + i | 0;
@@ -151,15 +177,26 @@ function AnalyzeCommandComponent(props) {
                       var tmp;
                       if (changeId !== undefined) {
                         var bookmarkNamesWithStatus = Utils.changeIdToLogEntry(changeGraph, changeId).localBookmarks.map(function (bookmarkName) {
+                              var prInfo = existingPRs !== undefined ? Caml_option.valFromOption(existingPRs).get(bookmarkName) : undefined;
                               var bookmark = changeGraph.bookmarks.get(bookmarkName);
-                              if (bookmark !== undefined) {
-                                if (bookmark.hasRemote && !bookmark.isSynced) {
-                                  return bookmarkName + "*";
-                                } else if (bookmark.hasRemote) {
-                                  return bookmarkName;
+                              if (bookmark === undefined) {
+                                return bookmarkName;
+                              }
+                              var statusParts = [];
+                              if (prInfo !== undefined) {
+                                if (prInfo.draft) {
+                                  statusParts.push("draft PR");
                                 } else {
-                                  return bookmarkName + "+";
+                                  statusParts.push("PR");
                                 }
+                              }
+                              if (bookmark.hasRemote && !bookmark.isSynced) {
+                                statusParts.push("modified");
+                              } else if (!bookmark.hasRemote) {
+                                statusParts.push("new");
+                              }
+                              if (statusParts.length > 0) {
+                                return bookmarkName + " [" + statusParts.join(", ") + "]";
                               } else {
                                 return bookmarkName;
                               }
@@ -192,11 +229,15 @@ function AnalyzeCommandComponent(props) {
                                   wrap: "truncate"
                                 }, itemIndex.toString());
                     }),
+                JsxRuntime.jsx($$Ink.Text, {
+                      children: "Status: [new]=not pushed, [modified]=pushed but changed, [PR]=open PR, [draft PR]=draft PR",
+                      dimColor: true
+                    }),
                 totalItems > contentViewportHeight ? JsxRuntime.jsx($$Ink.Text, {
-                        children: "(" + (visibleStartIndex + 1 | 0).toString() + "-" + (visibleEndIndex + 1 | 0).toString() + " of " + totalItems.toString() + " lines) Use ↑↓ to navigate commits",
+                        children: "(" + (visibleStartIndex + 1 | 0).toString() + "-" + (visibleEndIndex + 1 | 0).toString() + " of " + totalItems.toString() + " lines) Use ↑↓ to navigate, Shift+Tab for draft, Esc to exit",
                         dimColor: true
                       }) : JsxRuntime.jsx($$Ink.Text, {
-                        children: "Use ↑↓ to navigate between commits, Enter to select",
+                        children: "Use ↑↓ to navigate, Enter to select, Shift+Tab for draft, Esc to exit",
                         dimColor: true
                       })
               ],

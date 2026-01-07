@@ -31,6 +31,7 @@ type pullRequest = {
   title: string,
   base: pullRequestBaseOrHead,
   head: pullRequestBaseOrHead,
+  draft: bool,
 }
 
 type bookmarkNeedingPRBaseUpdate = {

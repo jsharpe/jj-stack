@@ -25,6 +25,50 @@ export type JjFunctions = {
 };
 
 /**
+ * Parse JSON objects from multi-line output where strings may contain embedded newlines
+ * Handles cases where author names or other fields contain literal newlines that break
+ * naive line-by-line parsing
+ */
+export function parseJsonLines(output: string): unknown[] {
+  const lines = output.trim().split(/\r?\n/);
+  const results: unknown[] = [];
+  let buffer = "";
+
+  for (const line of lines) {
+    if (line.trim() === "") continue;
+
+    // Concatenate lines directly without separator
+    // This handles the case where jj output contains literal newlines in JSON strings
+    // (which is invalid JSON), typically from config values with trailing whitespace
+    buffer += line;
+
+    // Try to parse the accumulated buffer
+    try {
+      const parsed = JSON.parse(buffer);
+      results.push(parsed);
+      buffer = ""; // Reset buffer after successful parse
+    } catch {
+      // If parse fails, this might be a multi-line JSON object
+      // Continue accumulating lines
+      continue;
+    }
+  }
+
+  // If there's leftover buffer, try to parse it one last time
+  if (buffer.trim()) {
+    try {
+      results.push(JSON.parse(buffer));
+    } catch (error) {
+      throw new Error(
+        `Failed to parse JSON buffer: ${error instanceof Error ? error.message : String(error)}. Buffer content: ${buffer}`
+      );
+    }
+  }
+
+  return results;
+}
+
+/**
  * Check if a remote URL points to GitHub.com
  * Supports both HTTPS and SSH formats:
  * - HTTPS: https://github.com/owner/repo.git
@@ -131,19 +175,28 @@ function getMyBookmarks(config: JjConfig): Promise<Bookmark[]> {
         }
 
         const bookmarks = new Map<string, Bookmark>();
-        const conflictedBookmarks: string[] = [];
-        const lines = stdout.trim().split("\n");
+        const conflictedBookmarkNames = new Set<string>();
 
-        for (const line of lines) {
-          if (line.trim() === "") continue;
+        let parsedLines: unknown[];
+        try {
+          parsedLines = parseJsonLines(stdout);
+        } catch (error) {
+          logger.error(`Failed to parse bookmark JSON output`, error);
+          return reject(error as Error);
+        }
 
+        for (const parsedLine of parsedLines) {
           try {
-            const bookmark = v.parse(BookmarkOutputSchema, JSON.parse(line));
+            const bookmark = v.parse(BookmarkOutputSchema, parsedLine);
 
-            // Skip conflicted bookmarks
+            // Track conflicted bookmarks and skip all entries for them
             if (bookmark.conflicted) {
-              logger.warn(`Skipping conflicted bookmark: ${bookmark.name}`);
-              conflictedBookmarks.push(bookmark.name);
+              conflictedBookmarkNames.add(bookmark.name);
+              continue;
+            }
+
+            // Skip entries for bookmarks we've identified as conflicted
+            if (conflictedBookmarkNames.has(bookmark.name)) {
               continue;
             }
 
@@ -172,15 +225,15 @@ function getMyBookmarks(config: JjConfig): Promise<Bookmark[]> {
               }
             }
           } catch (error) {
-            logger.error(`Failed to parse bookmark line: ${line}`, error);
+            logger.error(`Failed to parse bookmark data: ${JSON.stringify(parsedLine)}`, error);
             reject(error as Error);
             return;
           }
         }
 
-        if (conflictedBookmarks.length > 0) {
+        if (conflictedBookmarkNames.size > 0) {
           logger.warn(
-            `Found ${conflictedBookmarks.length} conflicted bookmark(s): ${conflictedBookmarks.join(", ")}. ` +
+            `Found ${conflictedBookmarkNames.size} conflicted bookmark(s): ${[...conflictedBookmarkNames].join(", ")}. ` +
             `These will be ignored. Run 'jj bookmark list' to see conflicts.`
           );
         }
@@ -257,12 +310,18 @@ remote_bookmarks.map(|b| stringify(b.name() ++ '@' ++ b.remote()).escape_json())
         }
 
         const changes: LogEntry[] = [];
-        const lines = stdout.trim().split("\n");
 
-        for (const line of lines) {
-          if (line.trim() === "") continue;
+        let parsedLines: unknown[];
+        try {
+          parsedLines = parseJsonLines(stdout);
+        } catch (error) {
+          logger.error(`Failed to parse log JSON output`, error);
+          return reject(error as Error);
+        }
+
+        for (const parsedLine of parsedLines) {
           try {
-            const rawChange = v.parse(LogEntrySchema, JSON.parse(line));
+            const rawChange = v.parse(LogEntrySchema, parsedLine);
             changes.push({
               commitId: rawChange.commitId,
               changeId: rawChange.changeId,
@@ -277,7 +336,7 @@ remote_bookmarks.map(|b| stringify(b.name() ++ '@' ++ b.remote()).escape_json())
               committedAt: new Date(rawChange.committedAt),
             });
           } catch (parseError) {
-            logger.error(`Failed to parse line: ${line}`, parseError);
+            logger.error(`Failed to parse log entry: ${JSON.stringify(parsedLine)}`, parseError);
             reject(
               new Error(
                 `Failed to parse JJ log output: ${parseError instanceof Error ? parseError.message : String(parseError)}`,
@@ -637,7 +696,7 @@ function getGitRemoteList(
           logger.warn(`Git remote list warnings: ${stderr}`);
         }
 
-        const lines = stdout.trim().split("\n");
+        const lines = stdout.trim().split(/\r?\n/);
         const remotes: Array<{ name: string; url: string }> = [];
 
         for (const line of lines) {
