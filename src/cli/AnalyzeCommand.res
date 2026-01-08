@@ -194,6 +194,7 @@ let analyzeCommand = async (jjFunctions: JJTypes.jjFunctions, ~remote: string, ~
     logEntry.localBookmarks[0]->Option.getExn,
     changeGraph,
     dryRun,
+    false, // draft
     remote,
   )
 }
