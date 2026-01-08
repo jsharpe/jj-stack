@@ -3,6 +3,7 @@
 import * as $$Ink from "ink";
 import * as Utils from "./Utils.res.mjs";
 import * as Js_exn from "rescript/lib/es6/js_exn.js";
+import * as Caml_option from "rescript/lib/es6/caml_option.js";
 import * as PervasivesU from "rescript/lib/es6/pervasivesU.js";
 import * as Core__Option from "@rescript/core/src/Core__Option.res.mjs";
 import * as SubmitCommand from "./SubmitCommand.res.mjs";
@@ -18,6 +19,10 @@ function buildChangeGraph(prim) {
 
 function getExistingPRs(prim0, prim1, prim2, prim3) {
   return SubmitJs.getExistingPRs(prim0, prim1, prim2, prim3);
+}
+
+function getGitHubConfig(prim0, prim1) {
+  return SubmitJs.getGitHubConfig(prim0, prim1);
 }
 
 async function analyzeCommand(jjFunctions, remote, dryRun) {
@@ -153,32 +158,60 @@ async function analyzeCommand(jjFunctions, remote, dryRun) {
         chars: " ○ trunk()".split(""),
         changeId: undefined
       });
+  var existingPRs;
+  try {
+    var githubConfig = await SubmitJs.getGitHubConfig(jjFunctions, remote);
+    var allBookmarks = [];
+    changeGraph.bookmarks.forEach(function (bookmark) {
+          allBookmarks.push(bookmark);
+        });
+    existingPRs = Caml_option.some(await getExistingPRs(githubConfig.octokit, githubConfig.owner, githubConfig.repo, allBookmarks));
+  }
+  catch (exn){
+    existingPRs = undefined;
+  }
   console.log();
-  var changeId$1 = await new Promise((function (resolve, _reject) {
+  var result = await new Promise((function (resolve, _reject) {
           var inkInstanceRef = {
             contents: undefined
           };
           var inkInstance = $$Ink.render(JsxRuntime.jsx(AnalyzeCommandComponent.make, {
                     changeGraph: changeGraph,
                     output: output,
-                    onSelect: (function (changeId) {
+                    existingPRs: existingPRs,
+                    onSelect: (function (changeId, draft) {
                         var instance = inkInstanceRef.contents;
                         if (instance !== undefined) {
                           instance.unmount();
                         }
-                        resolve(changeId);
+                        resolve([
+                              changeId,
+                              draft
+                            ]);
+                      }),
+                    onExit: (function () {
+                        var instance = inkInstanceRef.contents;
+                        if (instance !== undefined) {
+                          instance.unmount();
+                        }
+                        resolve(undefined);
                       })
                   }));
           inkInstanceRef.contents = inkInstance;
         }));
-  var segment = Core__Option.getExn(changeGraph.bookmarkedChangeIdToSegment.get(changeId$1), undefined);
-  var logEntry = Core__Option.getExn(segment[0], undefined);
-  return await SubmitCommand.runSubmit(jjFunctions, Core__Option.getExn(logEntry.localBookmarks[0], undefined), changeGraph, dryRun, remote);
+  if (result !== undefined) {
+    var segment = Core__Option.getExn(changeGraph.bookmarkedChangeIdToSegment.get(result[0]), undefined);
+    var logEntry = Core__Option.getExn(segment[0], undefined);
+    return await SubmitCommand.runSubmit(jjFunctions, Core__Option.getExn(logEntry.localBookmarks[0], undefined), changeGraph, dryRun, result[1], remote);
+  }
+  console.log("Cancelled.");
+  return PervasivesU.exit(0);
 }
 
 export {
   buildChangeGraph ,
   getExistingPRs ,
+  getGitHubConfig ,
   analyzeCommand ,
 }
 /* ink Not a pure module */

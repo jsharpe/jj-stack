@@ -12,13 +12,16 @@ type outputRow = {
 type uiState = {
   selectedIndex: int,
   scrollOffset: int,
+  draft: bool,
 }
 
 @react.component
 let make = (
   ~changeGraph: JJTypes.changeGraph,
   ~output: array<outputRow>,
-  ~onSelect: string => unit,
+  ~existingPRs: option<Map.t<string, SubmitCommand.pullRequest>>,
+  ~onSelect: (string, bool) => unit,
+  ~onExit: unit => unit,
 ) => {
   // Find all selectable indices (lines with changeId)
   let selectableIndices = React.useMemo1(() => {
@@ -30,10 +33,11 @@ let make = (
   // Find initial selected change (first selectable index)
   let initialSelectedIndex = selectableIndices->Array.get(0)->Option.getOr(0)
 
-  // Combined state for selection and scroll position
+  // Combined state for selection, scroll position, and draft mode
   let (uiState, setUiState) = React.useState(() => {
     selectedIndex: initialSelectedIndex,
     scrollOffset: 0,
+    draft: false,
   })
 
   // Get terminal dimensions and calculate viewport
@@ -49,8 +53,8 @@ let make = (
     }
   }
 
-  // Reserve space for: instructions (1 line) + scroll indicator (1 line) + empty line buffer (1 line)
-  let contentViewportHeight = terminalHeight - 3
+  // Reserve space for: instructions (1 line) + legend (1 line) + scroll indicator (1 line) + empty line buffer (1 line)
+  let contentViewportHeight = terminalHeight - 4
   let totalItems = output->Array.length
 
   // Helper function to calculate new scroll position based on selection
@@ -91,8 +95,10 @@ let make = (
     }
   }
 
-  InkBindings.Hooks.useInput((_, key) => {
-    if key.upArrow {
+  InkBindings.Hooks.useInput((_input, key) => {
+    if key.escape {
+      onExit()
+    } else if key.upArrow {
       // Find current position in selectable indices and move up
       let currentPos =
         selectableIndices->Array.findIndexOpt(idx => idx == uiState.selectedIndex)->Option.getOr(0)
@@ -105,7 +111,11 @@ let make = (
           totalItems,
           selectableIndices,
         )
-        setUiState(_ => {selectedIndex: newSelectedIndex, scrollOffset: newScrollOffset})
+        setUiState(prev => {
+          selectedIndex: newSelectedIndex,
+          scrollOffset: newScrollOffset,
+          draft: prev.draft,
+        })
       }
     } else if key.downArrow {
       // Find current position in selectable indices and move down
@@ -120,18 +130,29 @@ let make = (
           totalItems,
           selectableIndices,
         )
-        setUiState(_ => {selectedIndex: newSelectedIndex, scrollOffset: newScrollOffset})
+        setUiState(prev => {
+          selectedIndex: newSelectedIndex,
+          scrollOffset: newScrollOffset,
+          draft: prev.draft,
+        })
       }
     } else if key.return {
       // Selected index should always be a commit (since we only navigate between commits)
       switch output[uiState.selectedIndex] {
       | Some(row) =>
         switch row.changeId {
-        | Some(changeId) => onSelect(changeId)
+        | Some(changeId) => onSelect(changeId, uiState.draft)
         | None => () // Shouldn't happen since we only navigate to commits
         }
       | None => ()
       }
+    } else if key.tab && key.shift {
+      // Toggle draft mode with Shift+Tab
+      setUiState(prev => {
+        selectedIndex: prev.selectedIndex,
+        scrollOffset: prev.scrollOffset,
+        draft: !prev.draft,
+      })
     }
     ()
   }, None)
@@ -169,8 +190,14 @@ let make = (
   }
 
   <Box flexDirection="column">
-    // Instructions
-    <Text> {React.string("Select a stack to submit:")} </Text>
+    // Instructions with draft mode indicator
+    <Box>
+      <Text> {React.string("Select a stack to submit")} </Text>
+      {uiState.draft
+        ? <Text color="yellow"> {React.string(" [DRAFT MODE]")} </Text>
+        : React.null}
+      <Text> {React.string(":")} </Text>
+    </Box>
     // Content - render visible output lines
     {React.array(
       Array.make(~length=visibleEndIndex - visibleStartIndex + 1, 0)
@@ -187,13 +214,39 @@ let make = (
             <Text> {React.string(`${row.chars->Array.join("")}`)} </Text>
             {switch row.changeId {
             | Some(changeId) => {
-                let bookmarkNamesWithStatus = 
+                let bookmarkNamesWithStatus =
                   Utils.changeIdToLogEntry(changeGraph, changeId).localBookmarks
                   ->Array.map(bookmarkName => {
+                    let prInfo = switch existingPRs {
+                    | Some(prs) => prs->Map.get(bookmarkName)
+                    | None => None
+                    }
+
                     switch changeGraph.bookmarks->Map.get(bookmarkName) {
-                    | Some(bookmark) when bookmark.hasRemote && !bookmark.isSynced => bookmarkName ++ "*"
-                    | Some(bookmark) when !bookmark.hasRemote => bookmarkName ++ "+"
-                    | _ => bookmarkName
+                    | Some(bookmark) => {
+                        let statusParts = []
+
+                        // Check for PR and draft status
+                        switch prInfo {
+                        | Some(pr) when pr.draft => statusParts->Array.push("draft PR")
+                        | Some(_) => statusParts->Array.push("PR")
+                        | None => ()
+                        }
+
+                        // Check for modified status
+                        if bookmark.hasRemote && !bookmark.isSynced {
+                          statusParts->Array.push("modified")
+                        } else if !bookmark.hasRemote {
+                          statusParts->Array.push("new")
+                        }
+
+                        if statusParts->Array.length > 0 {
+                          bookmarkName ++ " [" ++ statusParts->Array.join(", ") ++ "]"
+                        } else {
+                          bookmarkName
+                        }
+                      }
+                    | None => bookmarkName
                     }
                   })
                 let bookmarksStr =
@@ -216,16 +269,20 @@ let make = (
         }
       }),
     )}
+    // Legend
+    <Text dimColor=true>
+      {React.string("Status: [new]=not pushed, [modified]=pushed but changed, [PR]=open PR, [draft PR]=draft PR")}
+    </Text>
     // Scroll indicator and instructions
     {totalItems > contentViewportHeight
       ? <Text dimColor=true>
           {React.string(
             `(${(visibleStartIndex + 1)->Int.toString}-${(visibleEndIndex + 1)
-                ->Int.toString} of ${totalItems->Int.toString} lines) Use ↑↓ to navigate commits`,
+                ->Int.toString} of ${totalItems->Int.toString} lines) Use ↑↓ to navigate, Shift+Tab for draft, Esc to exit`,
           )}
         </Text>
       : <Text dimColor=true>
-          {React.string("Use ↑↓ to navigate between commits, Enter to select")}
+          {React.string("Use ↑↓ to navigate, Enter to select, Shift+Tab for draft, Esc to exit")}
         </Text>}
   </Box>
 }

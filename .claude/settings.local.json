@@ -3,7 +3,19 @@
     "allow": [
       "Bash(jj bookmark create:*)",
       "Bash(jj git push:*)",
-      "Bash(jj bookmark track:*)"
+      "Bash(jj bookmark track:*)",
+      "Bash(jj show:*)",
+      "Bash(npm link)",
+      "Bash(jj-stack:*)",
+      "Bash(brew unlink:*)",
+      "Bash(node:*)",
+      "Bash(JJ_STACK_LOG_LEVEL=debug jj-stack:*)",
+      "Bash(DEBUG=true jj-stack:*)",
+      "Bash(jj config:*)",
+      "Bash(jj log:*)",
+      "Bash(DEBUG=jj-stack:*)",
+      "Bash(npm install:*)",
+      "Bash(jj bookmark:*)"
     ]
   }
 }

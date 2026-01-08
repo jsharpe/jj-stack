@@ -16,8 +16,10 @@ external getExistingPRs: (
   octoKit,
   string,
   string,
-  array<string>,
+  array<JJTypes.bookmark>,
 ) => promise<Map.t<string, SubmitCommand.pullRequest>> = "getExistingPRs"
+@module("../lib/submit.js")
+external getGitHubConfig: (JJTypes.jjFunctions, string) => promise<'githubConfig> = "getGitHubConfig"
 
 let analyzeCommand = async (jjFunctions: JJTypes.jjFunctions, ~remote: string, ~dryRun: bool) => {
   Console.log("Fetching from remote...")
@@ -165,36 +167,73 @@ let analyzeCommand = async (jjFunctions: JJTypes.jjFunctions, ~remote: string, ~
   // Add trunk line to the output array so all graph rendering is consistent
   output->Array.push({chars: " ○ trunk()"->String.split(""), changeId: None})
 
+  // Check for existing PRs (if this is a GitHub remote)
+  let existingPRs = try {
+    let githubConfig = await getGitHubConfig(jjFunctions, remote)
+    let allBookmarks = []
+    changeGraph.bookmarks->Map.forEach(bookmark => {
+      allBookmarks->Array.push(bookmark)
+    })
+    let prs = await getExistingPRs(
+      githubConfig["octokit"],
+      githubConfig["owner"],
+      githubConfig["repo"],
+      allBookmarks,
+    )
+    Some(prs)
+  } catch {
+  | _ => None // Not a GitHub remote or authentication failed
+  }
+
   Console.log() // add space between the above logs and the component
-  let changeId = await Promise.make((resolve, _reject) => {
+  let result = await Promise.make((resolve, _reject) => {
     let inkInstanceRef: ref<option<InkBindings.inkInstance>> = ref(None)
 
     let inkInstance = InkBindings.render(
       <AnalyzeCommandComponent
         changeGraph
         output
-        onSelect={changeId => {
+        existingPRs
+        onSelect={(changeId, draft) => {
           // Clean up the component first
           switch inkInstanceRef.contents {
           | Some(instance) => instance.unmount()
           | None => ()
           }
 
-          resolve(changeId)
+          resolve(Some((changeId, draft)))
+        }}
+        onExit={() => {
+          // Clean up the component first
+          switch inkInstanceRef.contents {
+          | Some(instance) => instance.unmount()
+          | None => ()
+          }
+
+          resolve(None)
         }}
       />,
     )
     inkInstanceRef := Some(inkInstance)
   })
 
-  let segment = changeGraph.bookmarkedChangeIdToSegment->Map.get(changeId)->Option.getExn
-  let logEntry = segment[0]->Option.getExn
-  await SubmitCommand.runSubmit(
-    jjFunctions,
-    logEntry.localBookmarks[0]->Option.getExn,
-    changeGraph,
-    dryRun,
-    false, // draft
-    remote,
-  )
+  switch result {
+  | Some((changeId, draft)) => {
+      let segment = changeGraph.bookmarkedChangeIdToSegment->Map.get(changeId)->Option.getExn
+      let logEntry = segment[0]->Option.getExn
+      await SubmitCommand.runSubmit(
+        jjFunctions,
+        logEntry.localBookmarks[0]->Option.getExn,
+        changeGraph,
+        dryRun,
+        draft,
+        remote,
+      )
+    }
+  | None => {
+      // User pressed Escape, exit gracefully
+      Console.log("Cancelled.")
+      exit(0)
+    }
+  }
 }
