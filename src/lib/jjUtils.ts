@@ -94,6 +94,7 @@ const BookmarkOutputSchema = v.object({
   changeId: v.string(),
   localBookmarks: v.array(v.string()),
   remoteBookmarks: v.array(v.string()),
+  conflicted: v.boolean(),
 });
 
 /**
@@ -105,7 +106,8 @@ function getMyBookmarks(config: JjConfig): Promise<Bookmark[]> {
     '"commitId":' ++ normal_target.commit_id().short().escape_json() ++ ', ' ++
     '"changeId":' ++ normal_target.change_id().short().escape_json() ++ ', ' ++
     '"localBookmarks": [' ++ normal_target.local_bookmarks().map(|b| b.name().escape_json()).join(",") ++ '], ' ++
-    '"remoteBookmarks": [' ++ normal_target.remote_bookmarks().map(|b| stringify(b.name() ++ "@" ++ b.remote()).escape_json()).join(",") ++ '] }\n'`;
+    '"remoteBookmarks": [' ++ normal_target.remote_bookmarks().map(|b| stringify(b.name() ++ "@" ++ b.remote()).escape_json()).join(",") ++ '], ' ++
+    '"conflicted":' ++ if(normal_target.conflict(), "true", "false") ++ ' }\n'`;
 
     execFile(
       config.binaryPath,
@@ -129,6 +131,7 @@ function getMyBookmarks(config: JjConfig): Promise<Bookmark[]> {
         }
 
         const bookmarks = new Map<string, Bookmark>();
+        const conflictedBookmarks: string[] = [];
         const lines = stdout.trim().split("\n");
 
         for (const line of lines) {
@@ -136,6 +139,14 @@ function getMyBookmarks(config: JjConfig): Promise<Bookmark[]> {
 
           try {
             const bookmark = v.parse(BookmarkOutputSchema, JSON.parse(line));
+
+            // Skip conflicted bookmarks
+            if (bookmark.conflicted) {
+              logger.warn(`Skipping conflicted bookmark: ${bookmark.name}`);
+              conflictedBookmarks.push(bookmark.name);
+              continue;
+            }
+
             const hasMatchingRemote = bookmark.remoteBookmarks.some((remote) =>
               remote.startsWith(bookmark.name + "@") && remote !== bookmark.name + "@git",
             );
@@ -165,6 +176,13 @@ function getMyBookmarks(config: JjConfig): Promise<Bookmark[]> {
             reject(error as Error);
             return;
           }
+        }
+
+        if (conflictedBookmarks.length > 0) {
+          logger.warn(
+            `Found ${conflictedBookmarks.length} conflicted bookmark(s): ${conflictedBookmarks.join(", ")}. ` +
+            `These will be ignored. Run 'jj bookmark list' to see conflicts.`
+          );
         }
 
         resolve(Array.from(bookmarks.values()));
